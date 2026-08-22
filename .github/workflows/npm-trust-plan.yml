@@ -1,0 +1,118 @@
+name: npm Trusted Publisher plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Repository to scan (opentiny/<repo>)
+        required: true
+        type: string
+      workflow:
+        description: Trusted Publisher workflow filename
+        required: false
+        default: npm-publish.yml
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Discover packages and generate maintainer script
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INPUT_REPOSITORY: ${{ inputs.repository }}
+      INPUT_WORKFLOW: ${{ inputs.workflow }}
+    steps:
+      - name: Check out engineering tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: engineering
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install tooling dependencies
+        working-directory: engineering
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Validate workflow inputs
+        working-directory: engineering
+        run: |
+          node --input-type=module <<'NODE'
+          import { validateRepository, validateWorkflow } from './scripts/npm/validation.mjs'
+          validateRepository(process.env.INPUT_REPOSITORY)
+          validateWorkflow(process.env.INPUT_WORKFLOW)
+          NODE
+
+      - name: Check out target repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ inputs.repository }}
+          path: target
+          persist-credentials: false
+
+      - name: Discover publishable packages
+        run: |
+          node engineering/scripts/npm/discover-packages.mjs \
+            --root target \
+            --repository "$INPUT_REPOSITORY" \
+            --workflow "$INPUT_WORKFLOW" > "$RUNNER_TEMP/npm-discovery.json"
+
+      - name: Generate local maintainer script
+        run: |
+          if node --input-type=module -e \
+            "import fs from 'node:fs'; const value = JSON.parse(fs.readFileSync(process.argv[1])); process.exit(value.packages.length ? 0 : 1)" \
+            "$RUNNER_TEMP/npm-discovery.json"
+          then
+            node engineering/scripts/npm/generate-trust-script.mjs \
+              --input "$RUNNER_TEMP/npm-discovery.json" > "$RUNNER_TEMP/npm-trust-apply.sh"
+          else
+            printf '%s\n' '# No publishable @opentiny/* packages were discovered.' > "$RUNNER_TEMP/npm-trust-apply.sh"
+          fi
+          bash -n "$RUNNER_TEMP/npm-trust-apply.sh"
+
+      - name: Write readiness report and script
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          const directory = process.env.RUNNER_TEMP
+          const discovery = JSON.parse(fs.readFileSync(`${directory}/npm-discovery.json`, 'utf8'))
+          const script = fs.readFileSync(`${directory}/npm-trust-apply.sh`, 'utf8')
+          const readiness = discovery.workflowExists ? 'READY' : 'ERROR'
+          const lines = [
+            '# npm Trusted Publisher plan',
+            '',
+            `- Repository: \`${discovery.repository}\``,
+            `- Workflow: \`.github/workflows/${discovery.workflow}\``,
+            `- Publishable packages: ${discovery.packages.length}`,
+            `- Workflow readiness: **${readiness}**`,
+            '',
+          ]
+          if (discovery.warnings.length) {
+            lines.push('## Warnings', '', ...discovery.warnings.map((warning) => `- ${warning}`), '')
+          }
+          lines.push(
+            '## Maintainer local apply script',
+            '',
+            'Run locally after `npm login`. The script reads actual npm trust state and asks once before applying changes.',
+            '',
+            '```bash',
+            script.trimEnd(),
+            '```',
+            '',
+          )
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'))
+          NODE
+
+      - name: Enforce readiness
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          const result = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/npm-discovery.json`, 'utf8'))
+          if (!result.workflowExists) throw new Error(`Missing .github/workflows/${result.workflow}`)
+          if (result.packages.length === 0) throw new Error('No publishable @opentiny/* packages discovered')
+          NODE
