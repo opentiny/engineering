@@ -16,16 +16,20 @@ on:
         required: false
         default: npm-publish.yml
         type: string
+      publish:
+        description: Publish to npm (requires NPM_BOOTSTRAP_TOKEN in the npm-bootstrap environment)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
   bootstrap:
-    name: Publish placeholder package
+    name: Prepare placeholder package and instructions
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: npm-bootstrap
     env:
       INPUT_PACKAGE: ${{ inputs.package }}
       INPUT_REPOSITORY: ${{ inputs.repository }}
@@ -40,7 +44,6 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
@@ -49,7 +52,6 @@ jobs:
         id: prepare
         env:
           BOOTSTRAP_RESULT: ${{ runner.temp }}/npm-bootstrap-result.json
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           node scripts/npm/bootstrap-package.mjs \
             --package "$INPUT_PACKAGE" \
@@ -62,37 +64,20 @@ jobs:
           fs.appendFileSync(process.argv[3], `directory=${result.directory}\nresult=${process.argv[2]}\n`)
           NODE
 
-      - name: Publish @opentiny placeholder
-        env:
-          BOOTSTRAP_DIRECTORY: ${{ steps.prepare.outputs.directory }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
-        run: npm publish "$BOOTSTRAP_DIRECTORY" --access public --registry https://registry.npmjs.org
-
-      - name: Write next steps
+      - name: Pack placeholder and write instructions
         env:
           BOOTSTRAP_RESULT: ${{ steps.prepare.outputs.result }}
-        run: |
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs'
-          const result = JSON.parse(fs.readFileSync(process.env.BOOTSTRAP_RESULT, 'utf8'))
-          const summary = [
-            '## npm bootstrap succeeded',
-            '',
-            `Package ${result.package}@${result.version} bootstrap succeeded.`,
-            '',
-            'Trusted Publisher still needs to be applied by an npm maintainer.',
-            '',
-            '```bash',
-            `npm trust github ${result.package} \\`,
-            `  --repo ${result.repository} \\`,
-            `  --file ${result.workflow} \\`,
-            '  --allow-publish \\',
-            '  --yes',
-            '```',
-            '',
-          ].join('\n')
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
-          NODE
+          BOOTSTRAP_ARTIFACT: ${{ runner.temp }}/npm-bootstrap-artifact
+          PUBLISH_REQUESTED: ${{ inputs.publish }}
+        run: node scripts/npm/pack-bootstrap.mjs
+
+      - name: Upload publishable package and instructions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-bootstrap-package
+          path: ${{ runner.temp }}/npm-bootstrap-artifact/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Remove temporary placeholder
         if: ${{ always() }}
@@ -111,3 +96,37 @@ jobs:
           }
           fs.rmSync(directory, { recursive: true, force: true })
           NODE
+
+  publish:
+    name: Publish prepared placeholder to npm
+    if: ${{ inputs.publish == true }}
+    needs: bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-bootstrap
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Download prepared package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: npm-bootstrap-package
+          path: ${{ runner.temp }}/npm-bootstrap-artifact
+
+      - name: Publish @opentiny placeholder
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo '::error::Set NPM_BOOTSTRAP_TOKEN in the npm-bootstrap environment, or rerun with publish unchecked to publish locally.'
+            exit 1
+          fi
+          npm publish "$RUNNER_TEMP/npm-bootstrap-artifact/placeholder.tgz" --access public --registry https://registry.npmjs.org
+
+      - name: Report successful publication
+        run: |
+          printf '%s\n' '## npm bootstrap published' '' 'The prepared 0.0.0 placeholder was published to npm. Apply Trusted Publisher configuration using the instructions in the preparation summary or artifact README.md.' >> "$GITHUB_STEP_SUMMARY"

@@ -22,8 +22,17 @@ npm 包创建后才能配置 Trusted Publisher。按以下步骤创建包，即�
 
 1. 在 `opentiny/engineering` 中运行 **npm package bootstrap** 工作流。
 2. 输入新的 `@opentiny/*` 包名及其所属的 `opentiny/*` 仓库。工作流文件名通常保持默认值 `npm-publish.yml`。
-3. 受保护的任务仅发布一个最小化的 `0.0.0` 占位版本。
-4. npm 维护者在本地登录，执行任务摘要中展示的 `npm trust github` 命令。
+3. `publish` 复选框默认不勾选。默认流程无需向 GitHub 保存 npm token，也不进入 `npm-bootstrap` 受保护环境，只生成最小化的 `0.0.0` 占位包。
+4. 在运行页面下载 `npm-bootstrap-package` artifact（保留 7 天），解压后进入包含 `placeholder.tgz` 的目录。按任务摘要或随包 `README.md` 的步骤，在本地执行以下命令，完成 npm 登录和 2FA：
+
+   ```bash
+   npm login --registry https://registry.npmjs.org
+   npm publish ./placeholder.tgz --access public --registry https://registry.npmjs.org
+   ```
+
+   本地账号须有创建 `@opentiny` 包的权限。发布成功后，由 npm 维护者执行摘要或 README 中的 `npm trust github` 命令（本地 npm 和 2FA 要求见“已有包迁移”）。
+
+   如需由 CI 直接发布，显式勾选 `publish`，并按“初始化发布令牌管理”配置环境密钥。准备任务仍先上传同一份压缩包，再由单独的受保护任务发布；准备成功不代表发布成功，须核对发布任务结果。缺少 token 时发布任务会明确报错，已生成的 artifact 仍可下载。
 5. 后续正式版本均由业务仓库通过 OIDC 发布。
 
 初始化任务不会检出或构建业务代码。如果包已存在，任务会失败，不会发布其他版本。
@@ -69,6 +78,8 @@ npm trust 变更不具备事务性。如果执行过程中已有一个或多个�
 如果必须重命名，使用新的文件名运行 **npm Trusted Publisher plan**。生成的本地脚本会检测当前工作流与目标不一致的包，并规划替换操作；配置已正确的包会被跳过。
 
 ## 初始化发布令牌管理
+
+默认不发布的流程不需要配置此令牌或 GitHub Environment。只有勾选 `publish` 让 CI 发布时，才需要以下配置。
 
 `NPM_BOOTSTRAP_TOKEN` 仅保存在 `opentiny/engineering` 中，仅用于创建最小化的首个 `0.0.0` 包版本。不得将其复制到业务仓库或用于日常发布。
 
