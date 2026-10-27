@@ -83,7 +83,7 @@ test('generated script aborts before create when revoke id extraction fails', as
   const log = path.join(root, 'npm.log')
   const scriptFile = path.join(root, 'apply.sh')
   await fs.mkdir(bin)
-  await fs.writeFile(path.join(bin, 'npm'), `#!/usr/bin/env bash
+  await fs.writeFile(path.join(bin, 'npm'), String.raw`#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$FAKE_NPM_LOG"
 if [[ "$1 $2" == "trust --help" ]]; then exit 0; fi
@@ -111,6 +111,44 @@ exec ${JSON.stringify(process.execPath)} "$@"
   assert.doesNotMatch(calls, /trust (?:revoke|github)/)
 })
 
+test('generated script stops without mutations for invalid trust state or failed queries', async (t) => {
+  for (const scenario of [
+    { output: '{"id":"old"} trailing-data', status: 0, error: /invalid JSON/ },
+    { output: '{"type":"github","file":"release.yml"}', status: 0, error: /no revocable id/ },
+    { output: '', status: 17, error: /update failed for @opentiny\/foo/ },
+  ]) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'engineering-trust-invalid-state-'))
+    t.after(() => fs.rm(root, { recursive: true, force: true }))
+    const bin = path.join(root, 'bin')
+    const log = path.join(root, 'npm.log')
+    const scriptFile = path.join(root, 'apply.sh')
+    await fs.mkdir(bin)
+    await fs.writeFile(path.join(bin, 'npm'), String.raw`#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_NPM_LOG"
+if [[ "$1 $2" == "trust list" ]]; then
+  printf '%s\n' "$FAKE_NPM_OUTPUT"
+  exit "$FAKE_NPM_STATUS"
+fi
+`)
+    await fs.chmod(path.join(bin, 'npm'), 0o755)
+    await fs.writeFile(scriptFile, generateTrustScript({
+      repository: 'opentiny/foo', workflow: 'npm-publish.yml', packages: [{ name: '@opentiny/foo' }],
+    }))
+    const execution = spawnSync('bash', [scriptFile, '--yes'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_NPM_LOG: log,
+        FAKE_NPM_OUTPUT: scenario.output, FAKE_NPM_STATUS: String(scenario.status),
+      },
+    })
+    assert.notEqual(execution.status, 0)
+    assert.match(execution.stderr, scenario.error)
+    assert.match(execution.stderr, /No npm trust mutations were started/)
+    assert.doesNotMatch(await fs.readFile(log, 'utf8'), /trust (?:revoke|github)/)
+  }
+})
+
 test('generated script reports recovery instructions after a partial replacement', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'engineering-trust-partial-failure-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
@@ -118,7 +156,7 @@ test('generated script reports recovery instructions after a partial replacement
   const log = path.join(root, 'npm.log')
   const scriptFile = path.join(root, 'apply.sh')
   await fs.mkdir(bin)
-  await fs.writeFile(path.join(bin, 'npm'), `#!/usr/bin/env bash
+  await fs.writeFile(path.join(bin, 'npm'), String.raw`#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$FAKE_NPM_LOG"
 if [[ "$1 $2" == "trust --help" ]]; then exit 0; fi
@@ -151,7 +189,7 @@ test('generated script reads every state before applying create, skip, and repla
   const log = path.join(root, 'npm.log')
   const scriptFile = path.join(root, 'apply.sh')
   await fs.mkdir(bin)
-  await fs.writeFile(path.join(bin, 'npm'), `#!/usr/bin/env bash
+  await fs.writeFile(path.join(bin, 'npm'), String.raw`#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$FAKE_NPM_LOG"
 if [[ "$1 $2" == "trust --help" ]]; then exit 0; fi

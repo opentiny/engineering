@@ -113,26 +113,17 @@ function embeddedAnalyzer() {
 
 ${parseTrustListOutput.toString()}
 
-function normalize(value) {
-  return {
-    id: value.id ?? null,
-    provider: value.type ?? value.provider ?? null,
-    repository: value.repository ?? value.claims?.repository ?? null,
-    workflow: value.file ?? value.workflow ?? value.claims?.workflow_ref?.file ?? null,
-    allowPublish: value.allowPublish === true || value.permissions?.includes('createPackage') === true,
-  }
-}
+${normalizeTrust.toString()}
+
+${createTrustPlan.toString()}
 
 const [mode, ...args] = process.argv.slice(2)
 if (mode === 'analyze') {
   const [input, output, repository, workflow] = args
-  const current = parseTrustListOutput(fs.readFileSync(input, 'utf8')).map(normalize)
-  const exact = current.length === 1 && current[0].provider === 'github' &&
-    current[0].repository === repository && current[0].workflow === workflow && current[0].allowPublish
-  const action = current.length === 0 ? 'create' : exact ? 'skip' : 'replace'
-  const revokeIds = action === 'replace' ? current.map((item) => item.id) : []
-  if (revokeIds.some((id) => typeof id !== 'string' || !id)) throw new Error('Mismatched trust has no revocable id')
-  fs.writeFileSync(output, JSON.stringify({ action, current, revokeIds }))
+  const plan = createTrustPlan(parseTrustListOutput(fs.readFileSync(input, 'utf8')), {
+    provider: 'github', repository, workflow, allowPublish: true,
+  })
+  fs.writeFileSync(output, JSON.stringify(plan))
 } else if (mode === 'field') {
   const [input, field] = args
   const plan = JSON.parse(fs.readFileSync(input, 'utf8'))

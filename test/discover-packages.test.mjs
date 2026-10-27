@@ -53,6 +53,31 @@ test('merges npm object workspaces and pnpm patterns and filters packages', asyn
   assert.ok(result.warnings.some((warning) => warning.includes('Required workflow is missing')))
 })
 
+test('discovers the root package when pnpm config has no packages field', async (t) => {
+  for (const configuration of ['onlyBuiltDependencies:\n  - esbuild\n', '']) {
+    const root = await makeRepository({
+      'package.json': { name: '@opentiny/foo' },
+      'pnpm-workspace.yaml': configuration,
+      '.github/workflows/npm-publish.yml': 'name: publish\n',
+    })
+    t.after(() => fs.rm(root, { recursive: true, force: true }))
+    const result = await discoverPackages({ root, repository: 'opentiny/foo' })
+    assert.deepEqual(result.packages, [{ name: '@opentiny/foo', path: '.' }])
+    assert.deepEqual(result.warnings, [])
+  }
+})
+
+test('rejects an explicit non-array pnpm packages field', async (t) => {
+  for (const configuration of ['packages: modules/*\n', 'packages: null\n']) {
+    const root = await makeRepository({
+      'package.json': { name: '@opentiny/foo' },
+      'pnpm-workspace.yaml': configuration,
+    })
+    t.after(() => fs.rm(root, { recursive: true, force: true }))
+    await assert.rejects(discoverPackages({ root, repository: 'opentiny/foo' }), /packages must be an array/)
+  }
+})
+
 test('supports common GitHub repository metadata forms', () => {
   assert.equal(repositoryFromPackageJson('git@github.com:opentiny/foo.git'), 'opentiny/foo')
   assert.equal(repositoryFromPackageJson({ url: 'git+https://github.com/opentiny/foo.git' }), 'opentiny/foo')

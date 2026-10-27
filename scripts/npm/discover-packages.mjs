@@ -50,8 +50,11 @@ async function pnpmWorkspacePatterns(root) {
     return []
   }
   const document = YAML.parse(await fs.readFile(workspaceFile, 'utf8'))
-  if (!document || !Array.isArray(document.packages)) {
-    throw new Error('pnpm-workspace.yaml must contain a packages array')
+  if (document == null || document.packages === undefined) {
+    return []
+  }
+  if (!Array.isArray(document.packages)) {
+    throw new Error('pnpm-workspace.yaml packages must be an array')
   }
   return document.packages
 }
