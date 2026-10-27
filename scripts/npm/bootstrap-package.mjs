@@ -44,12 +44,17 @@ export async function createBootstrapPackage({
   }
 
   const directory = await fs.mkdtemp(path.join(path.resolve(temporaryRoot), 'opentiny-npm-bootstrap-'))
-  await fs.writeFile(path.join(directory, 'package.json'), `${JSON.stringify({
-    name,
-    version: '0.0.0',
-    main: 'index.js',
-  }, null, 2)}\n`, { flag: 'wx' })
-  await fs.writeFile(path.join(directory, 'index.js'), 'module.exports = {}\n', { flag: 'wx' })
+  try {
+    await fs.writeFile(path.join(directory, 'package.json'), `${JSON.stringify({
+      name,
+      version: '0.0.0',
+      main: 'index.js',
+    }, null, 2)}\n`, { flag: 'wx' })
+    await fs.writeFile(path.join(directory, 'index.js'), 'module.exports = {}\n', { flag: 'wx' })
+  } catch (error) {
+    await fs.rm(directory, { recursive: true, force: true })
+    throw new Error(`Failed to create isolated bootstrap package: ${error.message}`, { cause: error })
+  }
 
   return {
     directory,

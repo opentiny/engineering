@@ -5,6 +5,8 @@ import path from 'node:path'
 import test from 'node:test'
 import {
   discoverPackages,
+  normalizeWorkspacePattern,
+  pathExists,
   repositoryFromPackageJson,
 } from '../scripts/npm/discover-packages.mjs'
 
@@ -57,4 +59,20 @@ test('supports common GitHub repository metadata forms', () => {
   assert.equal(repositoryFromPackageJson('github:opentiny/foo'), 'opentiny/foo')
   assert.equal(repositoryFromPackageJson('opentiny/foo'), 'opentiny/foo')
   assert.equal(repositoryFromPackageJson('https://example.com/opentiny/foo'), null)
+})
+
+test('rejects workspace patterns that can escape the repository', () => {
+  assert.equal(normalizeWorkspacePattern('./packages/*/'), 'packages/*/package.json')
+  for (const pattern of ['../outside', '!../outside', '/tmp/packages', '!/tmp/packages', 'C:\\outside', '!C:\\outside']) {
+    assert.throws(() => normalizeWorkspacePattern(pattern), /Unsafe workspace pattern/)
+  }
+})
+
+test('treats only ENOENT as a missing path', async () => {
+  assert.equal(await pathExists('/missing', async () => {
+    throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+  }), false)
+  await assert.rejects(pathExists('/unreadable', async () => {
+    throw Object.assign(new Error('denied'), { code: 'EACCES' })
+  }), /Unable to access \/unreadable: denied/)
 })

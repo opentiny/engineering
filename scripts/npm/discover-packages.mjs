@@ -15,15 +15,22 @@ import {
 const IGNORED_DIRECTORIES = ['**/node_modules/**', '**/.git/**']
 
 async function readJson(file) {
-  return JSON.parse(await fs.readFile(file, 'utf8'))
+  try {
+    return JSON.parse(await fs.readFile(file, 'utf8'))
+  } catch (error) {
+    throw new Error(`Failed to read JSON from ${file}: ${error.message}`, { cause: error })
+  }
 }
 
-async function exists(file) {
+export async function pathExists(file, access = fs.access) {
   try {
-    await fs.access(file)
+    await access(file)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return false
+    }
+    throw new Error(`Unable to access ${file}: ${error.message}`, { cause: error })
   }
 }
 
@@ -39,7 +46,7 @@ function npmWorkspacePatterns(packageJson) {
 
 async function pnpmWorkspacePatterns(root) {
   const workspaceFile = path.join(root, 'pnpm-workspace.yaml')
-  if (!(await exists(workspaceFile))) {
+  if (!(await pathExists(workspaceFile))) {
     return []
   }
   const document = YAML.parse(await fs.readFile(workspaceFile, 'utf8'))
@@ -49,12 +56,13 @@ async function pnpmWorkspacePatterns(root) {
   return document.packages
 }
 
-function normalizeWorkspacePattern(pattern) {
+export function normalizeWorkspacePattern(pattern) {
   if (typeof pattern !== 'string' || pattern.trim() === '') {
     throw new Error('Workspace patterns must be non-empty strings')
   }
   const normalized = pattern.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/$/, '')
-  if (path.posix.isAbsolute(normalized) || normalized.split('/').includes('..')) {
+  const patternBody = normalized.startsWith('!') ? normalized.slice(1) : normalized
+  if (!patternBody || path.posix.isAbsolute(patternBody) || path.win32.isAbsolute(patternBody) || patternBody.split('/').includes('..')) {
     throw new Error(`Unsafe workspace pattern: ${pattern}`)
   }
   return normalized.endsWith('package.json') ? normalized : `${normalized}/package.json`
@@ -104,7 +112,7 @@ export async function discoverPackages({ root, repository, workflow = 'npm-publi
   const desiredRepository = validateRepository(repository)
   const desiredWorkflow = validateWorkflow(workflow)
   const rootPackageFile = path.join(absoluteRoot, 'package.json')
-  if (!(await exists(rootPackageFile))) {
+  if (!(await pathExists(rootPackageFile))) {
     throw new Error(`No package.json found at repository root: ${absoluteRoot}`)
   }
 
@@ -140,8 +148,8 @@ export async function discoverPackages({ root, repository, workflow = 'npm-publi
     }
     try {
       validatePackageName(packageJson.name)
-    } catch {
-      warnings.push(`${location}: ${packageJson.name} is not an @opentiny/* package and was ignored`)
+    } catch (error) {
+      warnings.push(`${location}: ${packageJson.name} was ignored: ${error.message}`)
       continue
     }
     if (names.has(packageJson.name)) {
@@ -157,7 +165,7 @@ export async function discoverPackages({ root, repository, workflow = 'npm-publi
 
   packages.sort((left, right) => left.name.localeCompare(right.name))
   const workflowPath = path.join(absoluteRoot, '.github', 'workflows', desiredWorkflow)
-  const workflowExists = await exists(workflowPath)
+  const workflowExists = await pathExists(workflowPath)
   if (!workflowExists) {
     warnings.push(`Required workflow is missing: .github/workflows/${desiredWorkflow}`)
   }

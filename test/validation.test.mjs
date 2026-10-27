@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  parseArguments,
   shellQuote,
   validatePackageName,
   validateRepository,
@@ -29,4 +30,15 @@ test('rejects malicious and out-of-scope inputs', () => {
 test('quotes arbitrary values for POSIX shells', () => {
   assert.equal(shellQuote("one'two"), `'one'"'"'two'`)
   assert.equal(shellQuote('$(touch nope)'), "'$(touch nope)'")
+})
+
+test('parses CLI flags and rejects ambiguous argument lists', () => {
+  assert.deepEqual(parseArguments(['--repository', 'opentiny/foo', '--workflow', '']), {
+    repository: 'opentiny/foo',
+    workflow: '',
+  })
+  assert.throws(() => parseArguments(['repository']), /Unexpected argument/)
+  assert.throws(() => parseArguments(['--repository']), /Missing value/)
+  assert.throws(() => parseArguments(['--repository', '--workflow']), /Missing value/)
+  assert.throws(() => parseArguments(['--repository', 'one', '--repository', 'two']), /Duplicate argument/)
 })

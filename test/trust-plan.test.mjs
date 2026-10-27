@@ -24,6 +24,19 @@ test('parses npm list JSON including npm multi-document output', () => {
   assert.deepEqual(parseTrustListOutput('[]'), [])
 })
 
+test('rejects malformed or partially parsed npm trust output with the original parse error', () => {
+  for (const output of [
+    '{"id":"one"} trailing-data',
+    '{"id":"one"}\n{"id":',
+    '{"id":"one"}\nnot-json\n{"id":"two"}',
+  ]) {
+    assert.throws(
+      () => parseTrustListOutput(output),
+      /npm trust list returned invalid JSON: .*Initial JSON\.parse error:/,
+    )
+  }
+})
+
 test('normalizes flattened CLI and registry trust shapes', () => {
   assert.deepEqual(normalizeTrust({
     id: 'one', type: 'github', repository: 'opentiny/foo', file: 'npm-publish.yml', permissions: ['createPackage'],
@@ -38,6 +51,9 @@ test('creates, skips, and replaces incrementally', () => {
   assert.equal(createTrustPlan([{
     id: 'one', type: 'github', repository: 'opentiny/foo', file: 'npm-publish.yml', permissions: ['createPackage'],
   }], desired).action, 'skip')
+  assert.equal(createTrustPlan([{
+    id: 'no-publish', type: 'github', repository: 'opentiny/foo', file: 'npm-publish.yml', permissions: [],
+  }], desired).action, 'replace')
   const replacement = createTrustPlan([{
     id: 'one', type: 'github', repository: 'opentiny/foo', file: 'release.yml', permissions: ['createPackage'],
   }], desired)
@@ -56,6 +72,76 @@ test('generates a standalone script with one confirmation and exact revoke synta
   assert.match(script, /npm trust revoke "\$package" --id="\$trust_id"/)
   assert.match(script, /npm trust github "\$package" --repo "\$REPOSITORY" --file "\$WORKFLOW" --allow-publish --yes/)
   assert.equal((script.match(/Apply these changes/g) ?? []).length, 1)
+  assert.doesNotMatch(script, /done < <\(/)
+  assert.match(script, /if ! node .* revokeIds > "\$revoke_ids_file"/)
+})
+
+test('generated script aborts before create when revoke id extraction fails', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'engineering-trust-field-failure-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const bin = path.join(root, 'bin')
+  const log = path.join(root, 'npm.log')
+  const scriptFile = path.join(root, 'apply.sh')
+  await fs.mkdir(bin)
+  await fs.writeFile(path.join(bin, 'npm'), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_NPM_LOG"
+if [[ "$1 $2" == "trust --help" ]]; then exit 0; fi
+if [[ "$1 $2" == "trust list" ]]; then
+  printf '%s\n' '{"id":"old","type":"github","repository":"opentiny/foo","file":"release.yml","permissions":["createPackage"]}'
+fi
+`)
+  await fs.writeFile(path.join(bin, 'node'), `#!/usr/bin/env bash
+if [[ "\${2:-}" == "field" && "\${4:-}" == "revokeIds" ]]; then exit 23; fi
+exec ${JSON.stringify(process.execPath)} "$@"
+`)
+  await fs.writeFile(path.join(bin, 'sleep'), '#!/usr/bin/env bash\nexit 0\n')
+  await Promise.all(['npm', 'node', 'sleep'].map((name) => fs.chmod(path.join(bin, name), 0o755)))
+  await fs.writeFile(scriptFile, generateTrustScript({
+    repository: 'opentiny/foo', workflow: 'npm-publish.yml', packages: [{ name: '@opentiny/foo' }],
+  }))
+  const execution = spawnSync('bash', [scriptFile, '--yes'], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_NPM_LOG: log },
+  })
+  assert.notEqual(execution.status, 0)
+  assert.match(execution.stderr, /Failed to read revoke ids/)
+  assert.match(execution.stderr, /No npm trust mutations were started/)
+  const calls = await fs.readFile(log, 'utf8')
+  assert.doesNotMatch(calls, /trust (?:revoke|github)/)
+})
+
+test('generated script reports recovery instructions after a partial replacement', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'engineering-trust-partial-failure-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const bin = path.join(root, 'bin')
+  const log = path.join(root, 'npm.log')
+  const scriptFile = path.join(root, 'apply.sh')
+  await fs.mkdir(bin)
+  await fs.writeFile(path.join(bin, 'npm'), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_NPM_LOG"
+if [[ "$1 $2" == "trust --help" ]]; then exit 0; fi
+if [[ "$1 $2" == "trust list" ]]; then
+  printf '%s\n' '{"id":"old","type":"github","repository":"opentiny/foo","file":"release.yml","permissions":["createPackage"]}'
+fi
+if [[ "$1 $2" == "trust github" ]]; then exit 17; fi
+`)
+  await fs.writeFile(path.join(bin, 'sleep'), '#!/usr/bin/env bash\nexit 0\n')
+  await Promise.all(['npm', 'sleep'].map((name) => fs.chmod(path.join(bin, name), 0o755)))
+  await fs.writeFile(scriptFile, generateTrustScript({
+    repository: 'opentiny/foo', workflow: 'npm-publish.yml', packages: [{ name: '@opentiny/foo' }],
+  }))
+  const execution = spawnSync('bash', [scriptFile, '--yes'], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_NPM_LOG: log },
+  })
+  assert.notEqual(execution.status, 0)
+  assert.match(execution.stderr, /Some npm changes may already have been applied/)
+  assert.match(execution.stderr, /generate a fresh plan, and rerun it/)
+  const calls = await fs.readFile(log, 'utf8')
+  assert.match(calls, /trust revoke @opentiny\/foo --id=old/)
+  assert.match(calls, /trust github @opentiny\/foo/)
 })
 
 test('generated script reads every state before applying create, skip, and replace', async (t) => {

@@ -62,8 +62,9 @@ jobs:
 
       - name: Publish @opentiny placeholder
         env:
+          BOOTSTRAP_DIRECTORY: ${{ steps.prepare.outputs.directory }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
-        run: npm publish "${{ steps.prepare.outputs.directory }}" --access public --registry https://registry.npmjs.org
+        run: npm publish "$BOOTSTRAP_DIRECTORY" --access public --registry https://registry.npmjs.org
 
       - name: Write next steps
         env:
