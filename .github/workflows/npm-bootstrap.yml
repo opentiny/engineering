@@ -1,0 +1,113 @@
+name: npm package bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: New @opentiny/* package name
+        required: true
+        type: string
+      repository:
+        description: Owning repository (opentiny/<repo>)
+        required: true
+        type: string
+      workflow:
+        description: Trusted Publisher workflow filename
+        required: false
+        default: npm-publish.yml
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: Publish placeholder package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-bootstrap
+    env:
+      INPUT_PACKAGE: ${{ inputs.package }}
+      INPUT_REPOSITORY: ${{ inputs.repository }}
+      INPUT_WORKFLOW: ${{ inputs.workflow }}
+    steps:
+      - name: Check out engineering tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Validate and create isolated placeholder
+        id: prepare
+        env:
+          BOOTSTRAP_RESULT: ${{ runner.temp }}/npm-bootstrap-result.json
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: |
+          node scripts/npm/bootstrap-package.mjs \
+            --package "$INPUT_PACKAGE" \
+            --repository "$INPUT_REPOSITORY" \
+            --workflow "$INPUT_WORKFLOW" \
+            --temporary-root "$RUNNER_TEMP" > "$BOOTSTRAP_RESULT"
+          node --input-type=module - "$BOOTSTRAP_RESULT" "$GITHUB_OUTPUT" <<'NODE'
+          import fs from 'node:fs'
+          const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+          fs.appendFileSync(process.argv[3], `directory=${result.directory}\nresult=${process.argv[2]}\n`)
+          NODE
+
+      - name: Publish @opentiny placeholder
+        env:
+          BOOTSTRAP_DIRECTORY: ${{ steps.prepare.outputs.directory }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: npm publish "$BOOTSTRAP_DIRECTORY" --access public --registry https://registry.npmjs.org
+
+      - name: Write next steps
+        env:
+          BOOTSTRAP_RESULT: ${{ steps.prepare.outputs.result }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          const result = JSON.parse(fs.readFileSync(process.env.BOOTSTRAP_RESULT, 'utf8'))
+          const summary = [
+            '## npm bootstrap succeeded',
+            '',
+            `Package ${result.package}@${result.version} bootstrap succeeded.`,
+            '',
+            'Trusted Publisher still needs to be applied by an npm maintainer.',
+            '',
+            '```bash',
+            `npm trust github ${result.package} \\`,
+            `  --repo ${result.repository} \\`,
+            `  --file ${result.workflow} \\`,
+            '  --allow-publish \\',
+            '  --yes',
+            '```',
+            '',
+          ].join('\n')
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+          NODE
+
+      - name: Remove temporary placeholder
+        if: ${{ always() }}
+        env:
+          BOOTSTRAP_RESULT: ${{ runner.temp }}/npm-bootstrap-result.json
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          import path from 'node:path'
+          if (!fs.existsSync(process.env.BOOTSTRAP_RESULT)) process.exit(0)
+          const result = JSON.parse(fs.readFileSync(process.env.BOOTSTRAP_RESULT, 'utf8'))
+          const directory = path.resolve(result.directory)
+          const expectedParent = path.resolve(process.env.RUNNER_TEMP)
+          if (path.dirname(directory) !== expectedParent || !path.basename(directory).startsWith('opentiny-npm-bootstrap-')) {
+            throw new Error('Refusing to clean an unexpected path')
+          }
+          fs.rmSync(directory, { recursive: true, force: true })
+          NODE
