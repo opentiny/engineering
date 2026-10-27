@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "lint": "node --check scripts/npm/*.mjs test/*.test.mjs",
+    "lint": "for file in scripts/npm/*.mjs test/*.test.mjs; do node --check \"$file\" || exit 1; done",
     "test": "node --test"
   },
   "dependencies": {

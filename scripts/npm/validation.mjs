@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-const PACKAGE_PATTERN = /^@opentiny\/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
+const PACKAGE_PATTERN = /^@opentiny\/[a-z0-9_-][a-z0-9._-]*$/
 const REPOSITORY_PATTERN = /^opentiny\/[A-Za-z0-9._-]+$/
 const WORKFLOW_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$/
 
@@ -8,7 +8,7 @@ export function validatePackageName(value) {
   if (typeof value !== 'string' || !PACKAGE_PATTERN.test(value)) {
     throw new Error('Package must be a lowercase, URL-safe name in the @opentiny scope')
   }
-  if (value.length > 214 || value.includes('..')) {
+  if (value.length > 214) {
     throw new Error('Package name is not a valid npm package name')
   }
   return value

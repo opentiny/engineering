@@ -40,7 +40,7 @@ test('rejects malformed or partially parsed npm trust output with the original p
 test('normalizes flattened CLI and registry trust shapes', () => {
   assert.deepEqual(normalizeTrust({
     id: 'one', type: 'github', repository: 'opentiny/foo', file: 'npm-publish.yml', permissions: ['createPackage'],
-  }), { id: 'one', provider: 'github', repository: 'opentiny/foo', workflow: 'npm-publish.yml', allowPublish: true })
+  }), { id: 'one', provider: 'github', repository: 'opentiny/foo', workflow: 'npm-publish.yml', environment: '', allowPublish: true })
   assert.equal(normalizeTrust({
     id: 'two', type: 'github', claims: { repository: 'opentiny/foo', workflow_ref: { file: 'release.yml' } }, permissions: [],
   }).workflow, 'release.yml')
@@ -60,6 +60,17 @@ test('creates, skips, and replaces incrementally', () => {
   assert.equal(replacement.action, 'replace')
   assert.deepEqual(replacement.revokeIds, ['one'])
   assert.throws(() => createTrustPlan([{ type: 'github' }], desired), /revocable id/)
+})
+
+test('replaces environment-restricted trusts for a target without an environment', () => {
+  for (const trust of [
+    { id: 'old', type: 'github', repository: 'opentiny/foo', file: 'npm-publish.yml', environment: 'production', permissions: ['createPackage'] },
+    { id: 'old', type: 'github', claims: { repository: 'opentiny/foo', workflow_ref: { file: 'npm-publish.yml' }, environment: 'production' }, permissions: ['createPackage'] },
+  ]) {
+    assert.equal(normalizeTrust(trust).environment, 'production')
+    assert.equal(createTrustPlan([trust], desired).action, 'replace')
+    assert.equal(createTrustPlan([trust], { ...desired, environment: 'production' }).action, 'skip')
+  }
 })
 
 test('generates a standalone script with one confirmation and exact revoke syntax', () => {
@@ -198,6 +209,7 @@ if [[ "$1 $2" == "trust list" ]]; then
     @opentiny/a) printf '%s\n' '[]' ;;
     @opentiny/b) printf '%s\n' '{"id":"keep","type":"github","repository":"opentiny/foo","file":"npm-publish.yml","permissions":["createPackage"]}' ;;
     @opentiny/c) printf '%s\n' '{"id":"old","type":"github","repository":"opentiny/foo","file":"release.yml","permissions":["createPackage"]}' ;;
+    @opentiny/d) printf '%s\n' '{"id":"environment-old","type":"github","repository":"opentiny/foo","file":"npm-publish.yml","environment":"production","permissions":["createPackage"]}' ;;
   esac
 fi
 `)
@@ -207,20 +219,24 @@ fi
   await fs.writeFile(scriptFile, generateTrustScript({
     repository: 'opentiny/foo',
     workflow: 'npm-publish.yml',
-    packages: [{ name: '@opentiny/a' }, { name: '@opentiny/b' }, { name: '@opentiny/c' }],
+    packages: [{ name: '@opentiny/a' }, { name: '@opentiny/b' }, { name: '@opentiny/c' }, { name: '@opentiny/d' }],
   }))
   const execution = spawnSync('bash', [scriptFile, '--yes'], {
     encoding: 'utf8',
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_NPM_LOG: log },
   })
   assert.equal(execution.status, 0, execution.stderr)
-  assert.match(execution.stdout, /unchanged: 1[\s\S]*create:    1[\s\S]*replace:   1/)
+  assert.match(execution.stdout, /unchanged: 1[\s\S]*create:    1[\s\S]*replace:   2/)
+  assert.match(execution.stdout, /environment=production/)
+  assert.match(execution.stdout, /environment=\(none\)/)
   const calls = await fs.readFile(log, 'utf8')
   const callLines = calls.trim().split('\n')
   const lastList = callLines.findLastIndex((line) => line.startsWith('trust list'))
   const firstMutation = callLines.findIndex((line) => /^trust (?:github|revoke)/.test(line))
   assert.ok(lastList < firstMutation, 'all list calls should happen before mutations')
   assert.match(calls, /trust revoke @opentiny\/c --id=old/)
+  assert.match(calls, /trust revoke @opentiny\/d --id=environment-old/)
+  assert.match(calls, /trust github @opentiny\/d/)
   assert.match(calls, /trust github @opentiny\/a --repo opentiny\/foo --file npm-publish.yml --allow-publish --yes/)
   assert.doesNotMatch(calls, /trust github @opentiny\/b/)
 })

@@ -67,6 +67,19 @@ test('discovers the root package when pnpm config has no packages field', async 
   }
 })
 
+test('discovers npm-valid names with punctuation without filtering them out', async (t) => {
+  const names = ['foo-', 'foo_', 'foo.', 'foo..bar', '-foo', '_foo'].map((name) => `@opentiny/${name}`)
+  const root = await makeRepository({
+    'package.json': { private: true, workspaces: ['packages/*'] },
+    ...Object.fromEntries(names.map((name, index) => [`packages/${index}/package.json`, { name }])),
+    '.github/workflows/npm-publish.yml': 'name: publish\n',
+  })
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const result = await discoverPackages({ root, repository: 'opentiny/foo' })
+  assert.deepEqual(new Set(result.packages.map((item) => item.name)), new Set(names))
+  assert.deepEqual(result.warnings, [])
+})
+
 test('rejects an explicit non-array pnpm packages field', async (t) => {
   for (const configuration of ['packages: modules/*\n', 'packages: null\n']) {
     const root = await makeRepository({

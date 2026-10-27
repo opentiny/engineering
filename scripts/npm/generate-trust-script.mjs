@@ -84,6 +84,7 @@ export function normalizeTrust(trust) {
     provider: trust.type ?? trust.provider ?? null,
     repository: trust.repository ?? trust.claims?.repository ?? null,
     workflow: trust.file ?? trust.workflow ?? trust.claims?.workflow_ref?.file ?? null,
+    environment: trust.environment ?? trust.claims?.environment ?? '',
     allowPublish: trust.allowPublish === true || trust.permissions?.includes('createPackage') === true,
   }
 }
@@ -97,6 +98,7 @@ export function createTrustPlan(currentTrusts, desired) {
     && current[0].provider === desired.provider
     && current[0].repository === desired.repository
     && current[0].workflow === desired.workflow
+    && current[0].environment === (desired.environment ?? '')
     && current[0].allowPublish === desired.allowPublish
   if (matches) {
     return { action: 'skip', current, revokeIds: [] }
@@ -143,9 +145,9 @@ if (mode === 'analyze') {
     if (plan.action === 'replace') {
       console.log('~ ' + name + '\n  current:')
       for (const trust of plan.current) {
-        console.log('    ' + (trust.provider ?? '(unknown)') + ' ' + (trust.repository ?? '(unknown)') + ' ' + (trust.workflow ?? '(unknown)') + ' allowPublish=' + trust.allowPublish)
+        console.log('    ' + (trust.provider ?? '(unknown)') + ' ' + (trust.repository ?? '(unknown)') + ' ' + (trust.workflow ?? '(unknown)') + ' environment=' + (trust.environment || '(none)') + ' allowPublish=' + trust.allowPublish)
       }
-      console.log('  desired:\n    github ' + repository + ' ' + workflow + ' allowPublish=true\n')
+      console.log('  desired:\n    github ' + repository + ' ' + workflow + ' environment=(none) allowPublish=true\n')
     }
   })
   console.log('Plan:\n  unchanged: ' + counts.skip + '\n  create:    ' + counts.create + '\n  replace:   ' + counts.replace)
