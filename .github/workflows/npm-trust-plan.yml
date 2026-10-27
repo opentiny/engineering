@@ -83,14 +83,18 @@ jobs:
           const directory = process.env.RUNNER_TEMP
           const discovery = JSON.parse(fs.readFileSync(`${directory}/npm-discovery.json`, 'utf8'))
           const script = fs.readFileSync(`${directory}/npm-trust-apply.sh`, 'utf8')
-          const readiness = discovery.workflowExists ? 'READY' : 'ERROR'
+          const workflowStatus = discovery.workflowExists ? 'FOUND' : 'MISSING'
           const lines = [
             '# npm Trusted Publisher plan',
             '',
             `- Repository: \`${discovery.repository}\``,
             `- Workflow: \`.github/workflows/${discovery.workflow}\``,
             `- Publishable packages: ${discovery.packages.length}`,
-            `- Workflow readiness: **${readiness}**`,
+            `- Workflow file: **${workflowStatus}**`,
+            '- Publication readiness: **MANUAL CHECK REQUIRED**',
+            '',
+            'Before publishing, correct missing or mismatched package repository.url metadata in the business repository and verify Node.js >= 22.14.0, npm >= 11.5.1, GitHub-hosted runners, and id-token: write.',
+            'This plan checks workflow file presence only. A successful job or applied trust plan does not certify that packages are ready to publish.',
             '',
           ]
           if (discovery.warnings.length) {
